@@ -11,6 +11,9 @@
             <div v-if="parsedPeerMeta.url" class="row text-caption" :class="[darkMode ? 'text-grey' : 'text-black']">
               {{ parsedPeerMeta.url }}
             </div>
+            <div class="row text-h7" :class="[darkMode ? 'text-white' : 'text-black']">
+              {{ parsedPeerMeta.description }}
+            </div>
           </div>
 
           <q-space />
@@ -23,6 +26,19 @@
           />
         </div>
       </q-card-section>
+
+      <div v-if="addresses?.length" class="q-pa-md">
+        <div class="col-12 q-mt-lg items-center">
+          <p>Select the addresses to use on this site</p>
+          <div v-for="(address, index) in addresses" :key="index">
+            <input type="radio" v-model="selectedAddressIndex" :id="address" name="selectedAddressIndex" :value="index">
+            <label style="padding-left: 5px" :for="address">{{ address.split(':')[1] }}</label>
+          </div>
+          <hr />
+          <p>Permissions: see address, account balance, activity and suggest transactions to approve</p>
+          <p>Only connect with sites you trust.</p>
+        </div>
+      </div>
 
       <!-- buttons example -->
       <q-card-actions>
@@ -59,7 +75,13 @@ export default {
   props: {
     peerMeta: {},
     peerId: String,
-    darkMode: Boolean
+    darkMode: Boolean,
+    addresses: Array,
+  },
+  data () {
+    return {
+      selectedAddressIndex: 0
+    }
   },
   computed: {
     parsedPeerMeta () {
@@ -105,7 +127,7 @@ export default {
       // on OK, it is REQUIRED to
       // emit "ok" event (with optional payload)
       // before hiding the QDialog
-      this.$emit('ok')
+      this.$emit('ok', { selectedAddressIndex: this.selectedAddressIndex, selectedAddress: this.addresses?.[this.selectedAddressIndex] })
       // or with payload: this.$emit('ok', { ... })
 
       // then hiding dialog

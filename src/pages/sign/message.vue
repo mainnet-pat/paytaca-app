@@ -1,5 +1,28 @@
 <template>
-  <div id="app-container" class="" :class="{'pt-dark': darkMode}">
+  <q-dialog ref="dialog" @hide="onDialogHide" v-if="popupDialog">
+    <q-card class="q-dialog-plugin br-15 q-pb-xs">
+      <q-card-section class="text-black">
+        <div class="q-pa-md">
+          <div class="col-12 items-center">
+            <span v-if="userPrompt" class="text-lg text-bold span-text-center" v-text="userPrompt"></span>
+            <span v-else class="text-lg text-bold span-text-center">Sign Message</span>
+            <p class="text-lg">Signer:</p><textarea readonly class="ro-text" v-text="connectedAddress.split(':')[1]"></textarea>
+            <p class="text-lg">Origin:</p><textarea readonly class="ro-text" v-text="origin"></textarea>
+            <p class="text-lg">Message:</p><textarea readonly class="ro-text" v-text="message"></textarea>
+          </div>
+        </div>
+      </q-card-section>
+
+      <q-card-actions>
+        <q-btn outline padding="xs md" color="grey" :label="$t('Cancel')" rounded flat @click="cancel" />
+        <q-space />
+        <q-btn padding="xs lg" color="brandblue" :label="$t('Sign')" rounded @click="executeSecurityChecking" />
+      </q-card-actions>
+
+    <pinDialog v-model:pin-dialog-action="pinDialogAction" v-on:nextAction="onPinDialogCompletion" />
+    </q-card>
+  </q-dialog>
+  <div v-else id="app-container" class="" :class="{'pt-dark': darkMode}">
     <header-nav
       backnavpath="/"
       :title="$t('Sign Message')"
@@ -42,6 +65,11 @@ export default {
     pinDialog,
   },
   props: {
+    popupDialog: {
+      type: Boolean,
+      required: false,
+      default: false
+    },
     origin: {
       type: String,
       required: true
@@ -64,6 +92,9 @@ export default {
       required: true
     },
   },
+  emits: [
+    'ok', 'cancel', 'hide'
+  ],
   data () {
     return {
       asset: {},
@@ -85,6 +116,18 @@ export default {
   },
 
   methods: {
+    show () {
+      this.$refs.dialog?.show()
+    },
+
+    hide () {
+      this.$refs.dialog.hide()
+    },
+
+    onDialogHide () {
+      this.$emit('hide')
+    },
+
     async executeSecurityChecking () {
       try {
         await SecureStoragePlugin.get({ key: 'pin' })
@@ -107,9 +150,15 @@ export default {
       this.signedMessage = this.assetId === "sbch" ?
         await this.signSmartBCH() :
         await this.signBCH()
-      this.$q.bex.send('background.paytaca.signMessageResponse', {signedMessage: this.signedMessage, eventResponseKey: this.eventResponseKey})
-      this.sentResponse = true
-      window.close()
+
+      if (this.popupDialog === true) {
+        this.$emit('ok', this.signedMessage)
+        this.hide()
+      } else {
+        this.$q.bex.send('background.paytaca.signMessageResponse', {signedMessage: this.signedMessage, eventResponseKey: this.eventResponseKey})
+        this.sentResponse = true
+        window.close()
+      }
     },
 
     async signBCH () {
@@ -149,9 +198,13 @@ export default {
     },
 
     async cancel () {
-      this.$q.bex.send('background.paytaca.signMessageResponse', {signedMessage: undefined, eventResponseKey: this.eventResponseKey})
-      this.sentResponse = true
-      window.close()
+      if (this.popupDialog === true) {
+        this.hide()
+      } else {
+        this.$q.bex.send('background.paytaca.signMessageResponse', {signedMessage: undefined, eventResponseKey: this.eventResponseKey})
+        this.sentResponse = true
+        window.close()
+      }
     },
   },
 

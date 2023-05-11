@@ -61,7 +61,7 @@
           </template>
         </div>
         <div v-else>
-          <q-card style="max-width: 320px;" :class="{'pt-dark-card': darkMode }" class="shadow-2 br-15">
+          <q-card style="max-width: 320px;" :class="{'pt-dark-card': darkMode }" class="shadow-2 br-15" :key="parsedPeerMeta.name">
             <q-card-section>
               <div class="row items-start q-mb-sm">
                 <div class="text-grey">
@@ -81,7 +81,7 @@
                 <img
                   v-if="parsedPeerMeta.icon"
                   width="50"
-                  height="auto"
+                  height="50"
                   style="border-radius: 50%"
                   :src="parsedPeerMeta.icon"
                 />
@@ -198,6 +198,7 @@ import HeaderNav from '../../components/header-nav'
 import ProgressLoader from '../../components/ProgressLoader.vue'
 import WalletConnectConfirmDialog from '../../components/walletconnect/WalletConnectConfirmDialog.vue'
 import WalletConnectCallRequestDialog from '../../components/walletconnect/WalletConnectCallRequestDialog.vue'
+import SignMessageDialog from '../../pages/sign/message.vue';
 const ago = require('s-ago')
 
 export default {
@@ -230,7 +231,9 @@ export default {
 
       onDisconnectListener: null,
       onCallRequestListener: null,
-      darkMode: this.$store.getters['darkmode/getStatus']
+      onMetadataUpdatedListener: null,
+      darkMode: this.$store.getters['darkmode/getStatus'],
+      addresses: []
     }
   },
   computed: {
@@ -310,7 +313,206 @@ export default {
 
       const connector = createConnector(uri)
       this.pendingConnector = connector
+
+      if (connector?.version === 2) {
+        connector.initialize().then(() => {
+
+console.log("init");
+connector.pair({ uri });
+
+connector.on(
+  "session_proposal",
+  async (proposal) => {
+    console.log("session_proposal", proposal)
+    const { id, requiredNamespaces, optionalNamespaces, pairingTopic, proposer, relays } = proposal.params;
+    const namespaces = {};
+
+    if (!requiredNamespaces.bch) {
+      this.$q.notify({
+            color: 'red-5',
+            icon: 'mdi-close-circle',
+            message: `Mismatch chain id with "${requiredNamespaces[Object.keys(requiredNamespaces)[0]].chains[0]}". Expected 'bch'. Rejecting connection request`
+          })
+
+          await connector.reject({
+              id,
+              reason: {
+                code: 1,
+                message: "Chain ID is not supported",
+              },
+            });
+
+            this.handshakeOnProgress = false
+            return
+    }
+
+    connector._peerMeta = proposer.metadata;
+
+      const addresses = [];
+      const walletInfo = this.$store.getters['global/getWallet']("bch")
+        for (let i = 0; i <= walletInfo.lastAddressIndex; i++) {
+          addresses.push((await this.wallet.BCH.getAddressSetAt(i)).receiving);
+        }
+
+        this.$q.dialog({
+          component: WalletConnectConfirmDialog,
+          componentProps: {
+            peerId: proposer.publicKey, //payload.params[0].peerId,
+            peerMeta: proposer.metadata, //payload.params[0].peerMeta,
+            darkMode: this.darkMode,
+            addresses: addresses
+          }
+        }).onOk(async (payload) => {
+          this.disconnectConnector()
+          this.connector = connector
+          this.$forceUpdate()
+          this.attachEventsToConnector()
+
+          console.log(payload);
+          const address = addresses[payload.selectedAddressIndex].split(":").at(-1);
+          connector.accounts = [address];
+          Object.entries(requiredNamespaces).forEach(([key, value]) => {
+            namespaces[key] = {
+              methods: value.methods,
+              events: value.events,
+              accounts: value.chains.map((chain) => `${chain}:${address}`),
+            };
+          });
+          console.log(namespaces)
+
+          const { acknowledged } = await connector.approve({
+            id,
+            relayProtocol: relays[0].protocol,
+            namespaces,
+          });
+          this.connector._session = await acknowledged();
+          this.$store.commit('walletconnect/clearCallRequests')
+        })
+          .onCancel(async () => {
+            await connector.reject({
+              id,
+              reason: {
+                code: 1,
+                message: "User rejected",
+              },
+            });
+            await connector.disconnect({
+              topic: pairingTopic,
+              reason: {
+                code: 6e3,
+                message: "User disconnected"
+              }
+            });
+          })
+          .onDismiss(() => {
+            if (switchActivity) {
+              Plugins.DeepLinkHelperPlugin.finishActivity()
+            }
+          })
+
+        // connector.off('session_proposal')
+        this.handshakeOnProgress = false
+
+    // this.topic = session.topic;
+    // this.namespaces = namespaces;
+  },
+);
+
+// auto-respond
+// connector.on(
+//   "session_request",
+//   async (requestEvent) => {
+//     console.log("session_request", requestEvent, this.walletConnect)
+//     if (typeof connector === "undefined") {
+//       throw new Error("Sign Client not inititialized");
+//     }
+//     const { topic, params, id } = requestEvent;
+//     const { chainId, request } = params;
+
+//     // ignore if unmatched topic
+//     if (topic !== this.topic) return;
+
+//     try {
+//       // reject if no present target chainId
+//       if (typeof chainId === "undefined") {
+//         throw new Error("Missing target chainId");
+//       }
+//       const [_, chainRef] = chainId.split(":");
+//       // reject if unmatched chainId
+//       if (parseInt(chainRef, 10) !== this.chainId) {
+//         throw new Error(
+//           `Target chainId (${chainRef}) does not match active chainId (${this.chainId})`,
+//         );
+//       }
+
+//       let result;
+
+//       switch (request.method) {
+//         case "eth_sendTransaction":
+//           //  eslint-disable-next-line no-case-declarations
+//           const tx = await this.signer.sendTransaction(this.parseTxParams(request));
+//           await tx.wait();
+//           result = tx.hash;
+//           break;
+//         case "eth_signTransaction":
+//           //  eslint-disable-next-line no-case-declarations
+//           const txParams = await this.signer.populateTransaction(this.parseTxParams(request));
+//           result = await this.signer.signTransaction(txParams);
+//           break;
+//         case "eth_sendRawTransaction":
+//           //  eslint-disable-next-line no-case-declarations
+//           const receipt = await this.signer.provider.sendTransaction(request.params[0]);
+//           result = receipt.hash;
+//           break;
+//         case "eth_sign":
+//           //  eslint-disable-next-line no-case-declarations
+//           const ethMsg = request.params[1];
+//           result = await this.signer.signMessage(utils.arrayify(ethMsg));
+//           break;
+//         case "personal_sign":
+//           //  eslint-disable-next-line no-case-declarations
+//           const personalMsg = request.params[0];
+//           result = await this.signer.signMessage(utils.arrayify(personalMsg));
+//           break;
+//         case "cosmos_signDirect":
+//           //  eslint-disable-next-line no-case-declarations
+//           const signedDirect = await this.cosmosWallet.signDirect(
+//             request.params.signerAddress,
+//             parseSignDocValues(request.params.signDoc),
+//           );
+//           result = signedDirect.signature;
+//           break;
+//         case "kek":
+//           console.trace("kek")
+//           break
+//         default:
+//           throw new Error(`Method not supported: ${request.method}`);
+//       }
+
+//       // reject if undefined result
+//       if (typeof result === "undefined") {
+//         throw new Error("Result was undefined");
+//       }
+
+//       const response = formatJsonRpcResult(id, result);
+//       await connector.respond({ topic, response });
+//     } catch (e) {
+//       const message = e.message || e.toString();
+//       const response = formatJsonRpcError(id, message);
+//       await connector.respond({ topic, response });
+//     }
+//   },
+// );
+
+})
+
+        return;
+      }
+
+      // version1
+      console.log(112, connector)
       connector.on('session_request', (error, payload) => {
+        console.log(11, error, payload)
         if (error) {
           throw error
         }
@@ -365,7 +567,7 @@ export default {
 
     stopPendingConnector () {
       if (this.pendingConnector && this.pendingConnector.off && this.pendingConnector.off.call) {
-        this.pendingConnector.off('session_request')
+        this.pendingConnector.removeAllListeners('session_request')
       }
       this.handshakeOnProgress = false
       this.pendingConnector = null
@@ -376,7 +578,24 @@ export default {
       if (!this.connector) return
 
       this.detachEventstToConnector()
-      this.connector.killSession()
+      if (this.connector.version === 2) {
+        this.connector.disconnect({
+          topic: this.connector._session?.topic,
+          reason: {
+            code: 6e3,
+            message: "User disconnected"
+          }
+        });
+        this.connector.disconnect({
+          topic: this.connector._session?.pairingTopic,
+          reason: {
+            code: 6e3,
+            message: "User disconnected"
+          }
+        });
+      } else {
+        this.connector.killSession()
+      }
       this.connector = null
       this.$forceUpdate()
       this.handshakeFormData.walletConnectUri = ''
@@ -389,9 +608,11 @@ export default {
       this.walletConnect.removeEventListener('session_request')
       this.walletConnect.removeEventListener('disconnect', this.onDisconnectListener || undefined)
       this.walletConnect.removeEventListener('call_request', this.onCallRequestListener || undefined)
+      this.walletConnect.removeEventListener('metadata_update', this.onMetadataUpdatedListener || undefined)
 
       this.onDisconnectListener = undefined
       this.onCallRequestListener = undefined
+      this.onMetadataUpdatedListener = undefined
     },
 
     attachEventsToConnector () {
@@ -413,7 +634,7 @@ export default {
       this.walletConnect.addEventListener('disconnect', onDisconnectListener)
       this.onDisconnectListener = onDisconnectListener
 
-      const onCallRequestListener = (error, payload) => {
+      const onCallRequestListener = async (error, payload) => {
         if (error) {
           throw error
         }
@@ -423,11 +644,43 @@ export default {
           payload: payload
         })
 
+        if (payload.method === "bch_signMessage") {
+          // await this.$q.bex.send('background.paytaca.signMessage', {
+          //   origin: window.location.origin,
+          //   assetId: "bch",
+          //   message: "kek",
+          //   userPrompt: "sign kek?",
+          // })
+          // return
+          this.$q.dialog({
+            component: SignMessageDialog,
+            componentProps: {
+              origin: "Wallet Connect - " + this.connector._peerMeta.name,
+              assetId: "bch",
+              message: "kek",
+              userPrompt: "sign kek?",
+              popupDialog: true
+            }
+          }).onOk(async (payload) => {
+            console.log(132, payload)
+          }).onCancel(() => {
+            this.rejectCallRequest(this.callRequestDialog.callRequest)
+          })
+
+          return
+        }
+
         if (!this.callRequestDialog.show) this.showCallRequestInDialog(this.callRequests[0])
       }
 
       this.walletConnect.addEventListener('call_request', onCallRequestListener)
       this.onCallRequestListener = onCallRequestListener
+
+      const onMetadataUpdateListener = () => {
+        this.$forceUpdate()
+      }
+      this.walletConnect.addEventListener('metadata_update', onMetadataUpdateListener)
+      this.onMetadataUpdatedListener = onMetadataUpdateListener
     },
 
     respondToCallRequestInDialog (accept) {

@@ -6,6 +6,7 @@
     <div v-else>
       <q-pull-to-refresh @refresh="refresh">
         <div ref="fixedSection" class="fixed-container" :class="{'pt-dark': darkMode}" :style="{width: $q.platform.is.bex ? '375px' : '100%', margin: '0 auto'}">
+          <div @click="ddd">asfdsf</div>
           <connected-dialog @click="() => $refs['connected-dialog'].show()" ref="connected-dialog"></connected-dialog>
           <v-offline @detected-condition="onConnectivityChange">
             <q-banner v-if="$store.state.global.online === false" class="bg-red-4">
@@ -187,6 +188,7 @@ import { Plugins } from '@capacitor/core'
 import { VOffline } from 'v-offline'
 import axios from 'axios'
 import Watchtower from 'watchtower-cash-js'
+import SignMessageDialog from '../sign/message.vue'
 
 const { SecureStoragePlugin } = Plugins
 
@@ -336,6 +338,29 @@ export default {
     }
   },
   methods: {
+    ddd () {
+      console.log(123)
+      this.$q.dialog({
+            component: SignMessageDialog,
+            componentProps: {
+              origin: "WalletConnect - React App",
+              assetId: "bch",
+              message: "kek",
+              userPrompt: "sign kek?",
+              popupDialog: true
+            }
+          }).onOk(async (payload) => {
+            console.log(payload)
+        })
+          .onCancel(async () => {
+            console.log("cancel")
+
+          })
+          .onDismiss(() => {
+            console.log("dismiss")
+          })
+    },
+
     openPriceChart () {
       // console.log('opening price chart')
       this.$q.dialog({

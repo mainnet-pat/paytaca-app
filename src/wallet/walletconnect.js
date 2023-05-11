@@ -1,27 +1,102 @@
 import WalletConnect from '@walletconnect/client'
+import WalletConnectV2 from '@walletconnect/sign-client'
 // import { ethers } from 'ethers'
 
+const WalletMetadata = {
+  description: 'Paytaca App',
+  url: 'https://paytaca.com',
+  icons: ['https://walletconnect.org/walletconnect-logo.png'],
+  name: 'Paytaca'
+}
+
 // TODO: refactor
-export function getPreviousConnector () {
+export function getPreviousConnector (manager) {
   const wcInfoString = localStorage.getItem('walletconnect')
-  if (!wcInfoString) return
-  const wcInfo = JSON.parse(wcInfoString)
-  return new WalletConnect(wcInfo)
+  if (wcInfoString) {
+    const wcInfo = JSON.parse(wcInfoString)
+    return new WalletConnect(wcInfo)
+  }
+
+  const wc2InfoString = localStorage.getItem('wc@2:client:0.3//session')
+  if (wc2InfoString) {
+    // const wcInfo = JSON.parse(wc2InfoString)
+    // return new WalletConnect(wcInfo)
+    const _client = new WalletConnectV2({
+      projectId: "3fd234b8e2cd0e1da4bc08a0011bbf64",
+      metadata: WalletMetadata
+    });
+
+    _client.initialize().then(async () => {
+      const sessions = _client.session.getAll();
+      // console.log(sessions)
+      if (sessions.length) {
+        const lastKeyIndex = sessions.length - 1;
+        // console.log(lastKeyIndex)
+        const session = sessions[lastKeyIndex];
+        _client._peerMeta = session.peer.metadata;
+        _client.accounts = session.namespaces?.bch?.accounts.map(val => val.split(":").slice(2).join())
+        // console.log(_client._peerMeta)
+
+
+        // _client.on(
+        //   "session_proposal",
+        //   async (proposal) => {
+        //     console.log(2, "session_proposal", proposal)
+        //     const { id, requiredNamespaces, optionalNamespaces, pairingTopic, proposer, relays } = proposal.params;
+        //     const namespaces = {};
+
+        //     _client._peerMeta = proposer.metadata;
+        //     _client.accounts = [this.wallet.sBCH._wallet.address];
+
+        //           const { acknowledged } = await _client.approve({
+        //             id,
+        //             relayProtocol: relays[0].protocol,
+        //             namespaces,
+        //           });
+        //           await acknowledged();
+        //   },
+        // );
+
+        // await _client.connect({ pairingTopic: session.pairingTopic });//.then(({ approval }) => {
+          // console.log(_client.session);
+          await _client.connect(session)
+          _client._session = session;
+          // console.log(1, approval)
+
+        // approval();
+        _client.events.emit("metadata_update", undefined, session.peer.metadata);
+
+        // console.log(2)
+        // });
+      }
+    });
+
+    return _client;
+  }
 }
 
 export function createConnector (uri) {
+  if (uri.indexOf("@2") !== -1) {
+    const connector = new WalletConnectV2(
+      {
+        // Required
+        uri: uri,
+        // Required
+        metadata: WalletMetadata,
+        // logger: console,
+        projectId: "3fd234b8e2cd0e1da4bc08a0011bbf64"
+      }
+    )
+    return connector
+  }
+
   // Create connector
   const connector = new WalletConnect(
     {
       // Required
       uri: uri,
       // Required
-      clientMeta: {
-        description: 'Paytaca App',
-        url: 'https://paytaca.com',
-        icons: ['https://walletconnect.org/walletconnect-logo.png'],
-        name: 'Paytaca'
-      }
+      clientMeta: WalletMetadata,
     }
   )
 
@@ -122,16 +197,29 @@ export function parseWalletConnectUri (uri) {
     key: ''
   }
 
+  // wc:748356ab-d957-4004-82f9-c792a6a7e532@1?bridge=https%3A%2F%2Fo.bridge.walletconnect.org&key=4c70909685f81bc6cd15e10436a335294c433795d6ac7fc1934b969a96c292b5
   const match = String(uri).match(/^wc:([0-9a-f-]{36})@(\d*)(\?(bridge=.*)|(key=[0-9a-f]*))?$/i)
-  if (!match) return
+  if (match) {
+    const url = new URL(uri)
+    data.handshakeTopic = match[1]
+    data.version = match[2]
+    data.bridge = url.searchParams.get('bridge')
+    data.key = url.searchParams.get('key')
 
-  const url = new URL(uri)
-  data.handshakeTopic = match[1]
-  data.version = match[2]
-  data.bridge = url.searchParams.get('bridge')
-  data.key = url.searchParams.get('key')
+    return data
+  }
 
-  return data
+  // wc:22c73d8c3888d802ee73cfbb54f3f681312835b35a2bf49536a196d577ddc944@2?relay-protocol=irn&symKey=c5e7509411aa61e28e517b656fbf64145a51a00825d85ad898939c3f5f41fb68
+  const matchv2 = String(uri).match(/^wc:([0-9a-f-]{64})@(\d*)(\?(relay-protocol=.*)|(symKey=[0-9a-f]*))?$/i)
+  if (matchv2) {
+    const url = new URL(uri)
+    data.handshakeTopic = matchv2[1]
+    data.version = matchv2[2]
+    data.bridge = "wss://relay.walletconnect.com";
+    data.key = url.searchParams.get('symKey')
+
+    return data
+  }
 }
 
 export class WalletConnectManager {
@@ -163,6 +251,7 @@ export class WalletConnectManager {
     this._attachEventToConnector('session_request')
     this._attachEventToConnector('call_request')
     this._attachEventToConnector('disconnect')
+    this._attachEventToConnector('metadata_update')
   }
 
   _attachEventToConnector (eventName) {
@@ -188,6 +277,16 @@ export class WalletConnectManager {
   }
 
   _connectorEventHandler (eventName, error, payload) {
+    console.log(eventName, error, payload);
+
+    // convert to v1
+    if (eventName === 'session_request') {
+      eventName = 'call_request';
+      const v2EventPayload = error.params.request;
+      payload = v2EventPayload;
+      error = undefined;
+    }
+
     if (eventName === 'call_request' && payload) {
       this.store.commit('walletconnect/addCallRequest', {
         timestamp: Date.now(),
@@ -206,7 +305,7 @@ export class WalletConnectManager {
 
   _disconnectConnectorEvents () {
     if (!this.connector) return
-    ['session_request', 'call_request', 'disconnect'].forEach(eventName => {
+    ['session_request', 'call_request', 'disconnect', 'metadata_update'].forEach(eventName => {
       if (this._isSubscribedTo(eventName)) {
         this.connector._eventManager._eventEmmiters = this.connector._eventManager._eventEmmiters
           .filter(eventEmmiter => eventEmmiter.event !== eventName && eventEmmiter.callback !== this._listeners[eventName])
